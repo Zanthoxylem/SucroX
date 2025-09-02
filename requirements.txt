@@ -1,0 +1,10 @@
+# Core dependencies
+pandas>=2.2,<3
+numpy>=1.26,<3
+
+# GUI
+PyQt5>=5.15.10,<6
+
+# Optional (used internally by pandas/Qt but pinned here for reliability)
+python-dateutil>=2.8.2
+pytz>=2023.3
