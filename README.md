@@ -1,11 +1,11 @@
-# 🌱 SucroX – Sugarcane Crossing Assistant
+#  SucroX – Sugarcane Crossing Tool
 
-SucroX is a PyQt5 desktop application that helps sugarcane breeders manage tassel surveys, generate crossing combinations, enforce crossing rules, and keep track of daily crosses.  
+SucroX is a PyQt5 desktop application that helps sugarcane breeders manage tassel surveys, generate crossing combinations, and keep track of daily crosses.  
 It integrates **phenotypic datasets** (Photoperiod, CrossingDataset, GV traits, Kinship/AMAT) into a single streamlined workflow.
 
 ---
 
-## ✨ Features
+##  Features
 
 - **Tassel Survey**
   - Record flowering varieties by **Bay / Cart / Can**, with tassel counts and pollen ratings.
@@ -42,7 +42,7 @@ It integrates **phenotypic datasets** (Photoperiod, CrossingDataset, GV traits, 
 
 ---
 
-## 📂 Project Structure
+##  Project Structure
 
 When you first run the app, SucroX creates the following folders in the parent directory:
 
@@ -63,7 +63,7 @@ And JSON config files:
 
 ---
 
-## ⚙️ Installation
+##  Installation
 
 1. **Clone the repo**
    ```bash
@@ -85,7 +85,7 @@ And JSON config files:
 
 ---
 
-## ▶️ Running
+## Running
 
 From the repo root:
 
@@ -103,7 +103,7 @@ python Scripts/SucroX_2025.py --check
 
 ---
 
-## 📊 Input Datasets
+##  Input Datasets
 
 SucroX integrates with these files (CSV format):
 
@@ -114,15 +114,7 @@ SucroX integrates with these files (CSV format):
 
 ---
 
-## 🖼️ Screenshots (to add)
-
-- Tassel survey entry screen  
-- Crosses for the Day matrix with highlights and hidden columns  
-- Settings tab (highlight rules + drag-drop ordering)  
-
----
-
-## 🛠️ Development
+##  Development
 
 To bundle as a single `.exe` for Windows, install [PyInstaller](https://pyinstaller.org/):
 
@@ -135,13 +127,8 @@ The binary will be created in `dist/SucroX/`.
 
 ---
 
-## 📜 License
+##  License
 
 [MIT License](LICENSE) — feel free to use and adapt.
 
----
 
-## 🙌 Acknowledgments
-
-SucroX is being developed as part of sugarcane breeding research at LSU.  
-Special thanks to the breeding team for real-world feedback.
