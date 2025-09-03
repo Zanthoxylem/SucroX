@@ -1,11 +1,21 @@
 {
   "females_per_male": 2,
   "males_per_female": 1,
-  "hidden_columns": [
-    "FEMALE_NUMVAR",
-    "MALE_NUMVAR"
+  "hidden_columns": [],
+  "highlight_rules": [
+    {
+      "name": "inbred",
+      "logic": "AND",
+      "clauses": [
+        {
+          "column": "KINSHIP",
+          "op": ">",
+          "value": ".5"
+        }
+      ],
+      "color": "#FFEB3B"
+    }
   ],
-  "highlight_rules": [],
   "display_names": {
     "FEMALE_STD": "FEMALE",
     "MALE_STD": "MALE"

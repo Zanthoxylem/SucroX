@@ -4,13 +4,13 @@ from collections import defaultdict
 import pandas as pd
 
 from PyQt5 import QtWidgets
-from PyQt5.QtCore import Qt, QUrl, QFileSystemWatcher
+from PyQt5.QtCore import Qt, QUrl, QFileSystemWatcher, QEvent
 from PyQt5.QtGui import QFont, QIcon, QColor
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QTabWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QGridLayout, QTableWidget, QTableWidgetItem,
     QFileDialog, QCheckBox, QMessageBox, QButtonGroup, QListWidget,
-    QListWidgetItem, QDialog, QComboBox, QLineEdit, QScrollArea
+    QListWidgetItem, QDialog, QComboBox, QLineEdit, QScrollArea, QStyledItemDelegate
 )
 from PyQt5.QtGui import QDesktopServices
 
@@ -58,10 +58,9 @@ RULES_DEFAULT = {
     "females_per_male": 1,
     "males_per_female": 1,
     "hidden_columns": [],
-    # {"name":"...", "logic":"AND"/"OR", "clauses":[{"column":"KINSHIP","op":">=","value":"0.15"}], "color":"#FFEB3B"}
     "highlight_rules": [],
-    # NEW: mapping of original CSV header -> alternative display name used in Crosses for the Day
-    "display_names": {}
+    "display_names": {},
+    "column_order": []   # NEW: preferred order of original CSV headers
 }
 
 # -------------------- util functions --------------------
@@ -161,6 +160,24 @@ def build_key_maps(pp_path: Path):
 def safe_upper_strip(s):
     return str(s or "").strip().upper()
 
+def reorder_headers(csv_headers, preferred_order):
+    """Return csv_headers reordered by preferred_order (unknown headers appended)."""
+    pref = [h for h in (preferred_order or []) if h in csv_headers]
+    rest = [h for h in csv_headers if h not in pref]
+    return pref + rest
+
+# -------------------- Single-click check delegate --------------------
+class SingleClickCheckDelegate(QStyledItemDelegate):
+    """Toggle a checkable item when you click anywhere in the cell."""
+    def editorEvent(self, event, model, option, index):
+        if not (index.flags() & Qt.ItemIsUserCheckable):
+            return super().editorEvent(event, model, option, index)
+        if event.type() in (QEvent.MouseButtonRelease, QEvent.MouseButtonDblClick):
+            current = index.data(Qt.CheckStateRole) or Qt.Unchecked
+            model.setData(index, Qt.Unchecked if current == Qt.Checked else Qt.Checked, Qt.CheckStateRole)
+            return True
+        return super().editorEvent(event, model, option, index)
+
 # -------------------- Tassel Survey Tab --------------------
 class TasselSurveyTab(QWidget):
     def __init__(self, switch_to_matrix_callback=None, parent=None):
@@ -175,10 +192,9 @@ class TasselSurveyTab(QWidget):
             }}
             QPushButton:hover {{ background: #188f62; }}
 
-            /* --- Make only the background change when selected; keep text visible --- */
             QToolButton {{
                 background: #e0ebe8;
-                color: #0f2a22;                  /* keep dark text by default */
+                color: #0f2a22;
                 border: 1px solid #015c3a;
                 border-radius: 6px;
                 padding: 8px 12px;
@@ -187,21 +203,17 @@ class TasselSurveyTab(QWidget):
                 min-width: 40px;
                 min-height: 36px;
             }}
-            QToolButton:hover {{
-                background: #cde5d9;
-            }}
+            QToolButton:hover {{ background: #cde5d9; }}
             QToolButton:checked {{
-                background: #01915A;             /* turns green when selected */
-                color: #0f2a22;                  /* keep dark text so it never "disappears" */
+                background: #01915A;
+                color: #0f2a22;
                 border: 2px solid #015c3a;
             }}
-            /* Optional: keep same look even while hovering in checked state */
             QToolButton:checked:hover {{
                 background: #01915A;
                 color: #0f2a22;
             }}
         """)
-
 
         ensure_dirs()
         self.paths = get_paths()
@@ -224,37 +236,19 @@ class TasselSurveyTab(QWidget):
             b = QtWidgets.QToolButton()
             b.setText(str(text))
             b.setCheckable(True)
-            b.setAutoRaise(False)                 # important on Windows so checked state paints
+            b.setAutoRaise(False)
             b.setMinimumSize(40, 36)
             b.setStyleSheet("""
                 QToolButton {
-                    background: #e0ebe8;
-                    color: #0f2a22;
-                    border: 1px solid #015c3a;
-                    border-radius: 6px;
-                    padding: 8px 12px;
-                    font-weight: bold;
-                    font-size: 15px;
+                    background: #e0ebe8; color: #0f2a22; border: 1px solid #015c3a;
+                    border-radius: 6px; padding: 8px 12px; font-weight: bold; font-size: 15px;
                 }
-                QToolButton:hover {
-                    background: #cde5d9;
-                }
-                QToolButton:checked {
-                    background: #01915A;        /* bright green when selected */
-                    color: white;               /* keep text readable */
-                    border: 2px solid #015c3a;
-                }
-                QToolButton:checked:hover {
-                    background: #01915A;
-                    color: white;
-                }
-                QToolButton:pressed {
-                    padding-top: 9px;           /* tiny press feedback */
-                    padding-bottom: 7px;
-                }
+                QToolButton:hover { background: #cde5d9; }
+                QToolButton:checked { background: #01915A; color: white; border: 2px solid #015c3a; }
+                QToolButton:checked:hover { background: #01915A; color: white; }
+                QToolButton:pressed { padding-top: 9px; padding-bottom: 7px; }
             """)
             return b
-
 
         # Bay
         lab = QLabel("Bay (1-6):"); lab.setStyleSheet("font-weight:600;")
@@ -615,7 +609,6 @@ class GroupConfigDialog(QDialog):
         right = QVBoxLayout()
         self.group_combo = QComboBox()
         self.group_combo.addItems(list(self.groups.keys()))
-        right.addWidget(QLabel("Assign selected to group:"))
         right.addWidget(self.group_combo)
         self.assign_btn = QPushButton("Assign →")
         right.addWidget(self.assign_btn)
@@ -680,10 +673,14 @@ class MatrixTab(QWidget):
         """)
         self.group_cols = load_groups()  # { group_name: [col_idx_from_csv] }
         self.headers_all = []            # displayed labels
-        self.header_keys = []            # original keys incl. "Export"
+        self.header_keys = []            # original keys (ordered, with "Export" prefixed)
         self.display_names = {}          # header -> display label
         self.tassel_counts = {}
         self._suspend_selection_updates = False
+
+        # mapping from original CSV column index -> displayed table column index
+        # (displayed includes Export column at 0; data cols start at 1)
+        self._orig_index_to_display = {}
 
         lay = QVBoxLayout(self)
 
@@ -730,6 +727,12 @@ class MatrixTab(QWidget):
         self.table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         self.table.verticalHeader().setDefaultSectionSize(28)
         lay.addWidget(self.table)
+
+        # Bigger checkbox indicator + single-click toggle
+        self.table.setStyleSheet("""
+            QTableView::indicator { width: 22px; height: 22px; }
+        """)
+        self.table.setItemDelegateForColumn(0, SingleClickCheckDelegate(self.table))
 
         ctrl = QHBoxLayout()
         self.btn_reload = QPushButton("Reload Today's Crosses")
@@ -901,18 +904,29 @@ class MatrixTab(QWidget):
         self._load_display_names()
         with open(poss, newline='', encoding='utf-8') as f:
             r = csv.reader(f)
-            headers = next(r)
+            headers_csv = next(r)  # original CSV headers in their natural order
             rows = list(r)
 
-        # Keep the canonical/original keys (include Export first)
-        self.header_keys = ["Export"] + headers
+        # Determine display order from rules
+        rules = get_rules()
+        ordered_headers = reorder_headers(headers_csv, rules.get("column_order", []))
+
+        # Keep the canonical/original keys (include Export first) in display order
+        self.header_keys = ["Export"] + ordered_headers
 
         # Use display names for UI only
-        shown = ["Export"] + [self.display_names.get(h, h) for h in headers]
+        shown = ["Export"] + [self.display_names.get(h, h) for h in ordered_headers]
         self.headers_all = shown
-        self.populate_table_display(headers, shown, rows)
+        self.populate_table_display(headers_csv, ordered_headers, shown, rows)
 
-        # Persistent hidden columns by original header names
+        # Map original CSV indices -> displayed column indices
+        self._orig_index_to_display.clear()
+        for i, orig_name in enumerate(headers_csv):
+            if orig_name in ordered_headers:
+                disp_col = 1 + ordered_headers.index(orig_name)  # +1 for Export column
+                self._orig_index_to_display[i] = disp_col
+
+        # Persistently hidden columns by original header names (applied to displayed columns)
         try:
             hidden_keys = set(get_rules().get("hidden_columns", []))
             if hidden_keys:
@@ -924,24 +938,37 @@ class MatrixTab(QWidget):
         except Exception:
             pass
 
+        # Optional: ensure the first column is wide enough for easy clicking
+        if self.table.columnCount() > 0:
+            self.table.setColumnWidth(0, 90)
+
         self._live_refresh()
 
-    def populate_table_display(self, original_headers, shown_headers, rows):
+    def populate_table_display(self, original_headers, ordered_headers, shown_headers, rows):
+        """Render table with columns in ordered_headers (display names in shown_headers)."""
         self.table.clear()
         col_count = len(shown_headers)
         self.table.setColumnCount(col_count)
         self.table.setHorizontalHeaderLabels(shown_headers)
         self.table.setRowCount(0)
+
+        # Precompute original index lookup
+        name_to_orig_idx = {name: idx for idx, name in enumerate(original_headers)}
+
         for i, row in enumerate(rows):
             self.table.insertRow(i)
             # Export checkbox in col 0
             chk = QTableWidgetItem()
-            chk.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
+            chk.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
             chk.setCheckState(Qt.Unchecked)
             self.table.setItem(i, 0, chk)
-            # remaining columns map 1:1 to CSV headers (offset +1)
-            for j, val in enumerate(row, start=1):
+
+            # Fill data columns in the desired display order
+            for j, header_name in enumerate(ordered_headers, start=1):
+                orig_idx = name_to_orig_idx.get(header_name, None)
+                val = row[orig_idx] if (orig_idx is not None and orig_idx < len(row)) else ""
                 self.table.setItem(i, j, QTableWidgetItem(val))
+
         self.table.resizeColumnsToContents()
 
     def sort_table(self, column_index):
@@ -993,9 +1020,13 @@ class MatrixTab(QWidget):
         return idxs
 
     def show_only_group(self, group_name: str):
+        # Convert stored ORIGINAL csv indices to DISPLAY indices via mapping
         cols = self.group_cols.get(group_name, [])
         visible = {0}  # always keep Export
-        visible |= {c+1 for c in cols if 0 <= c < (self.table.columnCount()-1)}
+        for orig_idx in cols:
+            disp_col = self._orig_index_to_display.get(orig_idx)
+            if disp_col is not None and 0 <= disp_col < self.table.columnCount():
+                visible.add(disp_col)
         visible |= self.core_columns()
         for c in range(self.table.columnCount()):
             self.table.setColumnHidden(c, c not in visible)
@@ -1111,7 +1142,6 @@ class MatrixTab(QWidget):
                 if op == "!=": return a != b
             if op == "==": return t == v
             if op == "!=": return t != v
-
             return False
         elif op == "contains":
             return v.lower() in t.lower()
@@ -1210,6 +1240,8 @@ class SettingsTab(QWidget):
         self._possible_headers = _read_possible_headers()
         self.rules = get_rules()
         self.display_names = self.rules.get("display_names", {}) or {}
+        self.hidden_set = set(self.rules.get("hidden_columns", []))
+        self.order_pref = self.rules.get("column_order", []) or []
 
         self.pp_edit = QLineEdit(self.paths.get("photoperiod",""))
         self.cd_edit = QLineEdit(self.paths.get("crossingdataset",""))
@@ -1261,59 +1293,31 @@ class SettingsTab(QWidget):
             QMessageBox.information(self, "Saved", "Crossing rules updated.")
         btn_save_rule.clicked.connect(_save_rule)
         right.addWidget(btn_save_rule)
-
-        # Persistent Hidden Columns (multi-select)
-        right.addSpacing(10)
-        right.addWidget(QLabel("Persistently Hidden Columns"))
-        hint = QLabel("Select columns to start hidden (original header names).")
-        hint.setStyleSheet("color:#555; font-size:12px;")
-        right.addWidget(hint)
-
-        self.hidden_cols_list = QListWidget()
-        self.hidden_cols_list.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
-        self.hidden_cols_list.setStyleSheet(f"background:{CARD}; border:1px solid {BORDER};")
-        for h in self._possible_headers:
-            shown = f"{h} — (Display: {self.display_names.get(h, h)})"
-            it = QListWidgetItem(shown)
-            it.setData(Qt.UserRole, h)  # store original key
-            self.hidden_cols_list.addItem(it)
-        # preselect any previously hidden
-        for i in range(self.hidden_cols_list.count()):
-            it = self.hidden_cols_list.item(i)
-            if it.data(Qt.UserRole) in set(self.rules.get("hidden_columns", [])):
-                it.setSelected(True)
-
-        right.addWidget(self.hidden_cols_list)
-        btn_save_hidden = QPushButton("Save Hidden Columns")
-        def _save_hidden():
-            names = [self.hidden_cols_list.item(i).data(Qt.UserRole)
-                     for i in range(self.hidden_cols_list.count())
-                     if self.hidden_cols_list.item(i).isSelected()]
-            self.rules["hidden_columns"] = names
-            save_rules(self.rules)
-            QMessageBox.information(self, "Saved", "Hidden columns updated.")
-        btn_save_hidden.clicked.connect(_save_hidden)
-        right.addWidget(btn_save_hidden)
-
-        # Conditional Highlighting
+        # -------------------- Conditional Highlighting (RESTORED) --------------------
         right.addSpacing(10)
         right.addWidget(QLabel("Conditional Highlighting"))
+
+        # existing rules list
         self.hl_list = QListWidget()
         self.hl_list.setStyleSheet(f"background:{CARD}; border:1px solid {BORDER};")
         for rule in self.rules.get("highlight_rules", []):
             self.hl_list.addItem(rule.get("name","(unnamed rule)"))
         right.addWidget(self.hl_list)
 
+        # builder
         hl_form = QVBoxLayout()
+
+        # name
         hl_row1 = QHBoxLayout()
         self.hl_name = QLineEdit(); self.hl_name.setPlaceholderText("Rule name")
         hl_row1.addWidget(QLabel("Name:")); hl_row1.addWidget(self.hl_name)
         hl_form.addLayout(hl_row1)
 
+        # one-clause-at-a-time builder
         self.clauses = []
         clause_row = QHBoxLayout()
 
-        # Column combobox (original keys, shows display names)
+        # Column combobox (use original keys but show display names)
         self.cl_col = QComboBox()
         for h in self._possible_headers:
             label = f"{h} — (Display: {self.display_names.get(h, h)})"
@@ -1321,6 +1325,7 @@ class SettingsTab(QWidget):
         self.cl_op  = QComboBox(); self.cl_op.addItems(["==","!=",">",">=","<","<=","contains","not contains"])
         self.cl_val = QLineEdit(); self.cl_val.setPlaceholderText("Value (e.g., 0.15)")
         btn_add_clause = QPushButton("Add Clause")
+
         def _add_clause():
             c = self.cl_col.currentData()  # original header key
             o = self.cl_op.currentText().strip()
@@ -1331,6 +1336,7 @@ class SettingsTab(QWidget):
             self.clauses.append({"column": c, "op": o, "value": v})
             QMessageBox.information(self, "Added", f"Clause: {c} {o} {v}")
             self.cl_val.clear()
+
         btn_add_clause.clicked.connect(_add_clause)
 
         clause_row.addWidget(QLabel("Column:")); clause_row.addWidget(self.cl_col)
@@ -1339,6 +1345,7 @@ class SettingsTab(QWidget):
         clause_row.addWidget(btn_add_clause)
         hl_form.addLayout(clause_row)
 
+        # logic + color
         hl_row2 = QHBoxLayout()
         self.hl_logic = QComboBox(); self.hl_logic.addItems(["AND","OR"])
         hl_row2.addWidget(QLabel("Combine clauses with:"))
@@ -1351,6 +1358,7 @@ class SettingsTab(QWidget):
         hl_row2.addWidget(self.hl_color)
         hl_form.addLayout(hl_row2)
 
+        # save rule
         btn_save_rule = QPushButton("Save Highlight Rule")
         def _save_hl_rule():
             name = self.hl_name.text().strip() or f"Rule {len(self.rules.get('highlight_rules',[]))+1}"
@@ -1371,10 +1379,12 @@ class SettingsTab(QWidget):
         btn_save_rule.clicked.connect(_save_hl_rule)
         hl_form.addWidget(btn_save_rule)
 
+        # delete rule
         btn_delete_rule = QPushButton("Delete Selected Rule")
         def _del_rule():
             row = self.hl_list.currentRow()
-            if row < 0: return
+            if row < 0: 
+                return
             rules = get_rules()
             arr = rules.get("highlight_rules", [])
             if 0 <= row < len(arr):
@@ -1388,33 +1398,47 @@ class SettingsTab(QWidget):
 
         right.addLayout(hl_form)
 
-        # Display Names editor
-        right.addSpacing(12)
-        right.addWidget(QLabel("Column Display Names (used in Crosses for the Day)"))
-        dn_hint = QLabel("Leave blank to use original header. Saved to rules.json → display_names.")
+        # ---------- Display Names + Visibility ----------
+        right.addSpacing(10)
+        right.addWidget(QLabel("Column Display Names & Visibility"))
+        dn_hint = QLabel("Set a friendlier name and choose if the column is Visible or Not shown. Saves to rules.json.")
         dn_hint.setStyleSheet("color:#555; font-size:12px;")
         right.addWidget(dn_hint)
 
         self.display_name_edits = {}
+        self.visibility_selects = {}
 
         dn_card = QWidget()
         dn_grid = QGridLayout(dn_card)
         dn_grid.setColumnStretch(1, 1)
         right.addWidget(dn_card)
 
-        def _populate_display_names():
+        def _populate_display_names_and_visibility():
             poss_headers = self._possible_headers or []
             for row, h in enumerate(poss_headers):
                 lab = QLabel(h)
                 edit = QLineEdit(self.display_names.get(h, ""))
+
+                vis_combo = QComboBox()
+                vis_combo.addItem("Visible", "show")
+                vis_combo.addItem("Not shown", "hide")
+                if h in self.hidden_set:
+                    vis_combo.setCurrentIndex(1)
+                else:
+                    vis_combo.setCurrentIndex(0)
+
                 self.display_name_edits[h] = edit
+                self.visibility_selects[h] = vis_combo
+
                 dn_grid.addWidget(lab, row, 0)
                 dn_grid.addWidget(edit, row, 1)
+                dn_grid.addWidget(vis_combo, row, 2)
 
-        _populate_display_names()
+        _populate_display_names_and_visibility()
 
-        btn_save_display_names = QPushButton("Save Display Names")
-        def _save_display_names():
+        btn_save_display = QPushButton("Save Names & Visibility")
+        def _save_display_names_and_visibility():
+            # Display names
             mapping = {}
             for h, edit in self.display_name_edits.items():
                 val = edit.text().strip()
@@ -1428,12 +1452,75 @@ class SettingsTab(QWidget):
                     prior.pop(k, None)
             prior.update(mapping)
             rules["display_names"] = prior
+
+            # Hidden columns from per-row visibility
+            hidden = []
+            for h, combo in self.visibility_selects.items():
+                if combo.currentData() == "hide":
+                    hidden.append(h)
+            rules["hidden_columns"] = hidden
+
             save_rules(rules)
             self.rules = rules
-            self.display_names = prior
-            QMessageBox.information(self, "Saved", "Display names updated. Reload Crosses tab to see them.")
-        btn_save_display_names.clicked.connect(_save_display_names)
-        right.addWidget(btn_save_display_names)
+            self.display_names = rules["display_names"]
+            self.hidden_set = set(hidden)
+            QMessageBox.information(self, "Saved", "Display names and visibility updated. Reload Crosses tab to see changes.")
+        btn_save_display.clicked.connect(_save_display_names_and_visibility)
+        right.addWidget(btn_save_display)
+
+        # ---------- Column Order (drag to rearrange) ----------
+        right.addSpacing(12)
+        right.addWidget(QLabel("Column Order (drag to rearrange)"))
+        order_hint = QLabel("This order controls how columns appear in Crosses for the Day. New columns not listed will be appended.")
+        order_hint.setStyleSheet("color:#555; font-size:12px;")
+        right.addWidget(order_hint)
+
+        self.order_list = QListWidget()
+        self.order_list.setDragEnabled(True)
+        self.order_list.setAcceptDrops(True)
+        self.order_list.setDragDropMode(QtWidgets.QAbstractItemView.InternalMove)
+        self.order_list.setDefaultDropAction(Qt.MoveAction)
+        self.order_list.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
+        self.order_list.setStyleSheet(f"background:{CARD}; border:1px solid {BORDER};")
+        right.addWidget(self.order_list)
+
+        def _populate_order_list():
+            self.order_list.clear()
+            headers = self._possible_headers or []
+            ordered = reorder_headers(headers, self.order_pref)
+            for h in ordered:
+                text = f"{h} — (Display: {self.display_names.get(h, h)})"
+                it = QListWidgetItem(text)
+                it.setData(Qt.UserRole, h)
+                self.order_list.addItem(it)
+
+        _populate_order_list()
+
+        btns_order = QHBoxLayout()
+        btn_save_order = QPushButton("Save Order")
+        btn_reset_order = QPushButton("Reset to CSV Order")
+        btns_order.addWidget(btn_save_order)
+        btns_order.addWidget(btn_reset_order)
+        btns_order.addStretch(1)
+        right.addLayout(btns_order)
+
+        def _save_order():
+            order = []
+            for i in range(self.order_list.count()):
+                it = self.order_list.item(i)
+                order.append(it.data(Qt.UserRole))
+            rules = get_rules()
+            rules["column_order"] = order
+            save_rules(rules)
+            self.rules = rules
+            self.order_pref = order
+            QMessageBox.information(self, "Saved", "Column order updated. Reload Crosses tab to see changes.")
+        btn_save_order.clicked.connect(_save_order)
+
+        def _reset_order():
+            self.order_pref = []
+            _populate_order_list()
+        btn_reset_order.clicked.connect(_reset_order)
 
         right.addStretch(1)
 
